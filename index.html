@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSC 466 Project Proposal</title>
+</head>
+
+<body>
+
+    <h1>Adaptive Large-File Transfer for a LAN Media Server</h1>
+
+    <p>
+        Christopher Coetzee<br>
+        CSC 466
+    </p>
+
+    <h2>Motivation</h2>
+
+    <p>
+        I chose this topic because my roommates and I often have large media files on our personal devices that we want to watch on our TV. I would like to create a system where these files can be transferred directly over our LAN to a mini-PC connected to the TV that would act as a shared media server. Beyond the practical application, large-file transfers provide an opportunity to investigate how an application-layer transfer protocol should respond to changing network conditions. In particular, I want to investigate whether dynamically adjusting the transmission rate of a large-file transfer can allow the system to use available bandwidth efficiently while reducing its impact on other traffic sharing the network.
+    </p>
+
+    <h2>Methodology</h2>
+
+    <p>
+       I intend to build a Python-based media server running on the mini PC, with a browser-based interface that allows phones and computers on the LAN to upload large files without installing a separate client. Files will be divided into chunks before being transferred, and the system will support resumable transfers and integrity checking so that interrupted or corrupted transfers do not require the entire file to be sent again.
+The main experiment will compare different application-level transmission-rate strategies. The first approach will allow the transfer to send data as quickly as TCP permits. The second will use a predetermined fixed transmission-rate limit. The third will use an adaptive approach that changes its transmission rate according to observed network performance and competing traffic. For example, the adaptive approach could increase its sending rate when the network is lightly loaded and reduce it when background traffic begins competing for bandwidth.
+I will compare these approaches across a range of controlled network conditions by generating different levels and patterns of background traffic. Tests could include no background traffic, light and heavy competing traffic, and changing or bursty traffic during an ongoing file transfer. I will measure metrics including file-transfer throughput, total completion time, latency, bandwidth available to competing flows, and flow fairness. The goal is to determine whether an adaptive application-layer rate-control strategy can achieve a better balance between completing large-file transfers efficiently and sharing network resources fairly with other traffic.
+    </p>
+
+    <h2>Deliverables</h2>
+
+<table>
+    <thead>
+        <tr>
+            <th>Estimated Timeline</th>
+            <th>Deliverable</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Early-Mid Oct</td>
+            <td>Research related papers and finalize project design</td>
+        </tr>
+        <tr>
+            <td>Mid-Late Oct</td>
+            <td>Build the core LAN media transfer system</td>
+        </tr>
+        <tr>
+            <td>Late Oct - Early Nov</td>
+            <td>Implement fixed and adaptive transmission rate approaches and set up testing</td>
+        </tr>
+        <tr>
+            <td>Early Nov</td>
+            <td>Midterm Presentation</td>
+        </tr>
+        <tr>
+            <td>Early-Late Nov</td>
+            <td>Run experiments, collect data, and analyze results</td>
+        </tr>
+        <tr>
+            <td>Late Nov - Early Dec</td>
+            <td>Complete final report and presentation</td>
+        </tr>
+        <tr>
+            <td>Early Dec</td>
+            <td>Final Presentation</td>
+        </tr>
+        <tr>
+            <td>Mid Dec</td>
+            <td>Final Report</td>
+        </tr>
+    </tbody>
+</table>
+
+    <h2>Related Works</h2>
+
+    <p>
+   Floyd, S., Handley, M., Padhye, J., & Widmer, J. (2000, October 1). Equation-based congestion control for unicast applications. Computer Communication Review, 30(4), 43–56. https://doi.org/10.1145/347057.347397
+
+   Arslan, E., Pehlivan, B. A., & Kosar, T. (2018). Big data transfer optimization through adaptive parameter tuning. Journal of Parallel and Distributed Computing, 120, 89–100. https://doi.org/10.1016/j.jpdc.2018.05.003
+
+    </p>
+
+</body>
+</html>
