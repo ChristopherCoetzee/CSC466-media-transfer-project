@@ -8,10 +8,77 @@
 
 <h1>Send File to Media Server</h1>
 
-<form action="/upload" method="POST" enctype="multipart/form-data">
-    <input type="file" name="file" required>
+<form id="upload-form">
+    <input type="file" id="file-input" required>
     <button type="submit">Upload</button>
 </form>
+
+<p id="status"></p>
+
+<script>
+    const form = document.getElementById("upload-form");
+    const fileInput = document.getElementById("file-input");
+    const status = document.getElementById("status");
+    const button = form.querySelector("button");
+
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        const file = fileInput.files[0];
+        if (!file || file.size === 0) return;
+
+        const chunkSize = 1024 * 1024;
+        const totalChunks = Math.ceil(file.size / chunkSize);
+
+        let uploadId = "";
+
+        button.disabled = true;
+
+        try {
+            for (let i = 0; i < totalChunks; i++) {
+
+                const start = i * chunkSize;
+                const end = Math.min(start + chunkSize, file.size);
+
+                const chunk = file.slice(start, end);
+
+                const formData = new FormData();
+
+                formData.append("chunk", chunk, "chunk.bin");
+                formData.append("filename", file.name);
+                formData.append("index", i);
+                formData.append("total", totalChunks);
+                formData.append("upload_id", uploadId);
+
+                const response = await fetch("/upload-chunk", {
+                    method: "POST",
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || "Upload failed");
+                }
+
+                uploadId = result.upload_id;
+
+                status.textContent =
+                    `Uploaded ${i + 1} / ${totalChunks} chunks`;
+
+                console.log(`Sent chunk ${i}`);
+            }
+
+            status.textContent = "Upload complete!";
+
+        } catch (error) {
+            status.textContent = `Upload failed: ${error.message}`;
+
+        } finally {
+            button.disabled = false;
+        }
+    });
+</script>
 
 </body>
 </html>
