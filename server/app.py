@@ -5,13 +5,50 @@ from werkzeug.utils import secure_filename
 from uuid import uuid4
 import hashlib
 import hmac
+import json
 
 app = Flask(__name__)
 
 UPLOAD_FOLDER = Path(__file__).parent / "uploads"
 UPLOAD_FOLDER.mkdir(exist_ok=True)
 
-active_uploads = {}
+STATE_FOLDER = UPLOAD_FOLDER / ".upload_state"
+STATE_FOLDER.mkdir(exist_ok=True)
+
+
+def save_upload_state(upload_id, upload):
+    state_file = STATE_FOLDER / f"{upload_id}.json"
+    temp_file = STATE_FOLDER / f"{upload_id}.tmp"
+
+    temp_file.write_text(json.dumps(upload), encoding="utf-8")
+    temp_file.replace(state_file)
+
+
+def load_upload_states():
+    uploads = {}
+
+    for state_file in STATE_FOLDER.glob("*.json"):
+        upload_id = state_file.stem
+        temporary_file = UPLOAD_FOLDER / f"{upload_id}.part"
+
+        if not temporary_file.exists():
+            continue
+
+        try:
+            upload = json.loads(
+                state_file.read_text(encoding="utf-8")
+            )
+            uploads[upload_id] = upload
+
+        except (OSError, json.JSONDecodeError):
+            print(f"Could not restore upload {upload_id}")
+
+    return uploads
+
+
+active_uploads = load_upload_states()
+
+print(f"Restored {len(active_uploads)} unfinished uploads")
 
 
 @app.route("/")
@@ -27,6 +64,30 @@ def upload():
     file.save(destination)
 
     return f"Uploaded {file.filename}"
+
+@app.route("/upload-status", methods=["GET"])
+def upload_status():
+
+    upload_id = request.args.get("upload_id", "")
+
+    upload = active_uploads.get(upload_id)
+
+    if upload is None:
+        return jsonify(error="Unknown upload"), 404
+
+    temporary_file = UPLOAD_FOLDER / f"{upload_id}.part"
+
+    if (not temporary_file.exists()
+            or temporary_file.stat().st_size < upload["bytes_received"]):
+        return jsonify(error="Missing or incomplete upload data"), 409
+
+    return jsonify(
+        upload_id=upload_id,
+        filename=upload["filename"],
+        total=upload["total"],
+        next_index=upload["next_index"],
+        bytes_received=upload["bytes_received"]
+    )
 
 
 @app.route("/upload-chunk", methods =["POST"])
@@ -65,7 +126,8 @@ def upload_chunk():
         active_uploads[upload_id] = {
             "filename": filename,
             "total": total,
-            "next_index": 0
+            "next_index": 0,
+            "bytes_received": 0
         }
 
     upload = active_uploads.get(upload_id)
@@ -80,9 +142,20 @@ def upload_chunk():
 
     temporary_file = UPLOAD_FOLDER / f"{upload_id}.part"
 
+    expected_size = upload["bytes_received"]
+
+    if expected_size > 0 and not temporary_file.exists():
+        return jsonify(error="Missing partial upload data"), 409
+
+    if temporary_file.exists():
+        if temporary_file.stat().st_size < expected_size:
+            return jsonify(error="Incomplete saved upload"), 409
+
     with temporary_file.open("ab") as output:
+        output.truncate(expected_size)
         output.write(chunk_data)
 
+    upload["bytes_received"] += len(chunk_data)
     upload["next_index"] += 1
 
     if upload["next_index"] == total:
@@ -90,16 +163,19 @@ def upload_chunk():
         saved_name = f"{upload_id}_{filename}"
         temporary_file.rename(UPLOAD_FOLDER / saved_name)
 
+        (STATE_FOLDER / f"{upload_id}.json").unlink(missing_ok=True)
+
         del active_uploads[upload_id]
+
         return jsonify(
             upload_id=upload_id,
             complete=True,
             filename=saved_name
         )
 
+    save_upload_state(upload_id, upload)
+
     return jsonify(upload_id=upload_id, complete=False)
 
-    
-    
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, debug=False)
