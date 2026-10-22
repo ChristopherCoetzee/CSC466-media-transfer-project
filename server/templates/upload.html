@@ -15,6 +15,8 @@
 
 <p id="status"></p>
 
+<script src="{{ url_for('static', filename='sha256.min.js') }}"></script>
+
 <script>
     const form = document.getElementById("upload-form");
     const fileInput = document.getElementById("file-input");
@@ -42,9 +44,14 @@
 
                 const chunk = file.slice(start, end);
 
+                const chunkBytes = await chunk.arrayBuffer();
+                const chunkHash = sha256 (chunkBytes);
+                console.log(`Chunk ${i} SHA-256: ${chunkHash}`);
+
                 const formData = new FormData();
 
                 formData.append("chunk", chunk, "chunk.bin");
+                formData.append("sha256", chunkHash);
                 formData.append("filename", file.name);
                 formData.append("index", i);
                 formData.append("total", totalChunks);

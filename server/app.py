@@ -3,7 +3,8 @@ from pathlib import Path
 from flask import jsonify
 from werkzeug.utils import secure_filename
 from uuid import uuid4
-import shutil
+import hashlib
+import hmac
 
 app = Flask(__name__)
 
@@ -45,6 +46,20 @@ def upload_chunk():
     if chunk is None or not filename or total < 1 or not 0 <= index < total:
         return jsonify(error="Invalid upload"), 400
 
+    expected_hash = request.form.get("sha256", "")
+
+    chunk_data = chunk.read(1024 * 1024 + 1)
+
+    if not chunk_data or len(chunk_data) > 1024 * 1024:
+        return jsonify (error="Invalid chunk size"), 400
+
+    actual_hash = hashlib.sha256(chunk_data).hexdigest()
+
+    if not hmac.compare_digest(actual_hash, expected_hash):
+        return jsonify(error="Chunk integrity verification failed"), 422
+
+    print(f"Chunk {index}: SHA-256 verified")
+
     if index == 0:
         upload_id = uuid4().hex
         active_uploads[upload_id] = {
@@ -66,7 +81,7 @@ def upload_chunk():
     temporary_file = UPLOAD_FOLDER / f"{upload_id}.part"
 
     with temporary_file.open("ab") as output:
-        shutil.copyfileobj(chunk.stream, output)
+        output.write(chunk_data)
 
     upload["next_index"] += 1
 
