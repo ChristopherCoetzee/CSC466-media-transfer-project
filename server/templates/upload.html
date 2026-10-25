@@ -9,7 +9,12 @@
 <h1>Send File to Media Server</h1>
 
 <form id="upload-form">
-    <input type="file" id="file-input" required>
+    <p>Select movies or individual subtitle files:</p>
+    <input type="file" id="file-input" multiple>
+
+    <p>Or select a movie folder:</p>
+    <input type="file" id="folder-input" webkitdirectory multiple>
+
     <button type="submit">Upload</button>
 </form>
 
@@ -20,25 +25,33 @@
 <script>
     const form = document.getElementById("upload-form");
     const fileInput = document.getElementById("file-input");
+    const folderInput = document.getElementById("folder-input");
     const status = document.getElementById("status");
     const button = form.querySelector("button");
 
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
 
-        const file = fileInput.files[0];
-        if (!file || file.size === 0) return;
+        const files = [...fileInput.files, ...folderInput.files]
+    .filter(file => file.size > 0);
+
+if (!files.length) return;
+
+button.disabled = true;
+
+try {
+    for (const file of files) {
+        const relativePath = file.webkitRelativePath || file.name;
 
         const chunkSize = 1024 * 1024;
         const totalChunks = Math.ceil(file.size / chunkSize);
-        const uploadKey = `upload:${file.name}:${file.size}:${file.lastModified}`;
-        
+        const uploadKey = `upload:${relativePath}:${file.size}:${file.lastModified}`;
+
+        // Skip files previously completed in this browser
+        if (localStorage.getItem(uploadKey) === "done") continue;
+
         let uploadId = localStorage.getItem(uploadKey) || "";
         let startIndex = 0;
-
-       button.disabled = true;
-
-try {
     if (uploadId) {
 
         const response = await fetch(
@@ -90,6 +103,7 @@ try {
                 formData.append("chunk", chunk, "chunk.bin");
                 formData.append("sha256", chunkHash);
                 formData.append("filename", file.name);
+                formData.append("relative_path", relativePath);
                 formData.append("index", i);
                 formData.append("total", totalChunks);
                 formData.append("upload_id", uploadId);
@@ -114,8 +128,11 @@ try {
                 console.log(`Sent chunk ${i}`);
             }
 
-            status.textContent = "Upload complete!";
-            localStorage.removeItem(uploadKey);
+                    localStorage.setItem(uploadKey, "done");
+        status.textContent = `Finished: ${relativePath}`;
+    }
+
+    status.textContent = "All selected files uploaded!";
 
         } catch (error) {
             status.textContent = `Upload failed: ${error.message}`;

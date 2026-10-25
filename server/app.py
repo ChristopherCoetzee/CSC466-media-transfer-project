@@ -1,16 +1,20 @@
+
 from flask import Flask, render_template, request
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from flask import jsonify
 from werkzeug.utils import secure_filename
 from uuid import uuid4
 import hashlib
 import hmac
 import json
+import os
 
 app = Flask(__name__)
 
-UPLOAD_FOLDER = Path(__file__).parent / "uploads"
-UPLOAD_FOLDER.mkdir(exist_ok=True)
+UPLOAD_FOLDER = Path(
+    os.environ.get("MEDIA_FOLDER", str(Path(__file__).parent / "uploads"))
+)
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 
 STATE_FOLDER = UPLOAD_FOLDER / ".upload_state"
 STATE_FOLDER.mkdir(exist_ok=True)
@@ -56,15 +60,6 @@ def index():
     return render_template("upload.html")
 
 
-@app.route("/upload", methods=["POST"])
-def upload():
-    file = request.files["file"]
-
-    destination = UPLOAD_FOLDER / file.filename
-    file.save(destination)
-
-    return f"Uploaded {file.filename}"
-
 @app.route("/upload-status", methods=["GET"])
 def upload_status():
 
@@ -90,8 +85,7 @@ def upload_status():
     )
 
 
-@app.route("/upload-chunk", methods =["POST"])
-
+@app.route("/upload-chunk", methods=["POST"])
 def upload_chunk():
 
     chunk = request.files.get("chunk")
@@ -102,7 +96,27 @@ def upload_chunk():
         index = int(request.form.get("index", "-1"))
         total = int(request.form.get("total", "0"))
     except ValueError:
-         return jsonify(error="Invalid chunk information"), 400
+        return jsonify(error="Invalid chunk information"), 400
+
+    relative_path = request.form.get("relative_path", filename)
+    parts = relative_path.split("/")
+
+    if any(
+        not p or p in (".", "..")
+        or p.endswith((".", " "))
+        or any(c in '<>:"\\|?*' or ord(c) < 32 for c in p)
+        or PureWindowsPath(p).is_reserved()
+        for p in parts
+    ):
+        return jsonify(error="Invalid movie path"), 400
+
+    destination = UPLOAD_FOLDER.joinpath(*parts)
+
+    if not destination.resolve().is_relative_to(UPLOAD_FOLDER.resolve()):
+        return jsonify(error="Invalid destination"), 400
+
+    if index == 0 and destination.exists():
+        return jsonify(error="File already exists"), 409
 
     if chunk is None or not filename or total < 1 or not 0 <= index < total:
         return jsonify(error="Invalid upload"), 400
@@ -112,7 +126,7 @@ def upload_chunk():
     chunk_data = chunk.read(1024 * 1024 + 1)
 
     if not chunk_data or len(chunk_data) > 1024 * 1024:
-        return jsonify (error="Invalid chunk size"), 400
+        return jsonify(error="Invalid chunk size"), 400
 
     actual_hash = hashlib.sha256(chunk_data).hexdigest()
 
@@ -127,7 +141,8 @@ def upload_chunk():
             "filename": filename,
             "total": total,
             "next_index": 0,
-            "bytes_received": 0
+            "bytes_received": 0,
+            "relative_path": relative_path,
         }
 
     upload = active_uploads.get(upload_id)
@@ -137,7 +152,8 @@ def upload_chunk():
 
     if (upload["next_index"] != index
             or upload["filename"] != filename
-            or upload["total"] != total):
+            or upload["total"] != total
+            or upload.get("relative_path", filename) != relative_path):
         return jsonify(error="Unexpected chunk"), 400
 
     temporary_file = UPLOAD_FOLDER / f"{upload_id}.part"
@@ -160,8 +176,12 @@ def upload_chunk():
 
     if upload["next_index"] == total:
 
-        saved_name = f"{upload_id}_{filename}"
-        temporary_file.rename(UPLOAD_FOLDER / saved_name)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+        if destination.exists():
+            return jsonify(error="File already exists"), 409
+
+        temporary_file.rename(destination)
 
         (STATE_FOLDER / f"{upload_id}.json").unlink(missing_ok=True)
 
@@ -170,12 +190,13 @@ def upload_chunk():
         return jsonify(
             upload_id=upload_id,
             complete=True,
-            filename=saved_name
+            filename=relative_path
         )
 
     save_upload_state(upload_id, upload)
 
     return jsonify(upload_id=upload_id, complete=False)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, debug=False)
