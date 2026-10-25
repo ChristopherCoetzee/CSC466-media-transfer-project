@@ -31,7 +31,8 @@
 
         const chunkSize = 1024 * 1024;
         const totalChunks = Math.ceil(file.size / chunkSize);
-
+        const uploadKey = `upload:${file.name}:${file.size}:${file.lastModified}`;
+        
         let uploadId = "";
 
         button.disabled = true;
@@ -69,6 +70,7 @@
                 }
 
                 uploadId = result.upload_id;
+                localStorage.setItem(uploadKey, uploadId);
 
                 status.textContent =
                     `Uploaded ${i + 1} / ${totalChunks} chunks`;
@@ -77,6 +79,7 @@
             }
 
             status.textContent = "Upload complete!";
+            localStorage.removeItem(uploadKey);
 
         } catch (error) {
             status.textContent = `Upload failed: ${error.message}`;
