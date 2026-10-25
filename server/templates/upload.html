@@ -33,13 +33,49 @@
         const totalChunks = Math.ceil(file.size / chunkSize);
         const uploadKey = `upload:${file.name}:${file.size}:${file.lastModified}`;
         
-        let uploadId = "";
+        let uploadId = localStorage.getItem(uploadKey) || "";
+        let startIndex = 0;
 
-        button.disabled = true;
+       button.disabled = true;
 
-        try {
-            for (let i = 0; i < totalChunks; i++) {
+try {
+    if (uploadId) {
 
+        const response = await fetch(
+            `/upload-status?upload_id=${encodeURIComponent(uploadId)}`
+        );
+
+        const saved = await response.json();
+
+        if (response.status === 404) {
+            // The server no longer knows this upload.
+            // Begin a new upload instead.
+            localStorage.removeItem(uploadKey);
+            uploadId = "";
+
+        } else if (!response.ok) {
+            throw new Error(saved.error || "Could not check upload status");
+
+        } else {
+            // Verify that the saved progress is consistent.
+            if (saved.total !== totalChunks ||
+                !Number.isInteger(saved.next_index) ||
+                saved.next_index < 0 ||
+                saved.next_index >= totalChunks ||
+                saved.bytes_received !== saved.next_index * chunkSize) {
+                throw new Error("Saved upload progress is inconsistent");
+            }
+
+            startIndex = saved.next_index;
+
+            status.textContent =
+                `Resuming from chunk ${startIndex + 1} / ${totalChunks}`;
+
+            console.log(`Resuming from chunk ${startIndex}`);
+        }
+    }
+
+    for (let i = startIndex; i < totalChunks; i++) {
                 const start = i * chunkSize;
                 const end = Math.min(start + chunkSize, file.size);
 
