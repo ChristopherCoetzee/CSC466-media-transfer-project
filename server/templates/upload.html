@@ -31,6 +31,8 @@
 
         const chunkSize = 1024 * 1024;
         const totalChunks = Math.ceil(file.size / chunkSize);
+        const transferMode = "unrestricted";
+        const targetRateBps = 2 * 1024 * 1024;
         const uploadKey = `upload:${file.name}:${file.size}:${file.lastModified}`;
         
         let uploadId = localStorage.getItem(uploadKey) || "";
@@ -75,7 +77,24 @@ try {
         }
     }
 
-    for (let i = startIndex; i < totalChunks; i++) {
+    const transferStart = performance.now();
+
+                for (let i = startIndex; i < totalChunks; i++) {
+                            if (transferMode === "fixed") {
+                const bytesScheduled = (i - startIndex) * chunkSize;
+
+                const targetElapsedMs =
+                    (bytesScheduled / targetRateBps) * 1000;
+
+                const elapsedMs = performance.now() - transferStart;
+
+                const delayMs = Math.max(0, targetElapsedMs - elapsedMs);
+
+                if (delayMs > 0) {
+                    await new Promise(resolve => setTimeout(resolve, delayMs));
+                }
+            }
+
                 const start = i * chunkSize;
                 const end = Math.min(start + chunkSize, file.size);
 
@@ -113,6 +132,17 @@ try {
 
                 console.log(`Sent chunk ${i}`);
             }
+
+            const elapsedSeconds = (performance.now() - transferStart) / 1000;
+
+            const bytesTransferred = file.size - startIndex * chunkSize;
+
+            const averageThroughput =
+                (bytesTransferred / (1024 * 1024)) / elapsedSeconds;
+
+            console.log(`Transfer mode: ${transferMode}`);
+            console.log(`Transfer time: ${elapsedSeconds.toFixed(2)} seconds`);
+            console.log(`Average throughput: ${averageThroughput.toFixed(2)} MiB/s`);
 
             status.textContent = "Upload complete!";
             localStorage.removeItem(uploadKey);
