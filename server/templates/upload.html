@@ -31,7 +31,7 @@
 
         const chunkSize = 1024 * 1024;
         const totalChunks = Math.ceil(file.size / chunkSize);
-        const transferMode = "unrestricted";
+        const transferMode = "adaptive";
         const targetRateBps = 2 * 1024 * 1024;
         const uploadKey = `upload:${file.name}:${file.size}:${file.lastModified}`;
         
@@ -79,6 +79,14 @@ try {
 
     const transferStart = performance.now();
 
+    let adaptiveRateBps = targetRateBps;
+    const minRateBps = 0.5 * 1024 * 1024;
+    const maxRateBps = 8 * 1024 * 1024;
+    const increaseBps = 0.25 * 1024 * 1024;
+
+    let baselineChunkMs = Infinity;
+    let nextChunkAt = performance.now();
+
                 for (let i = startIndex; i < totalChunks; i++) {
                             if (transferMode === "fixed") {
                 const bytesScheduled = (i - startIndex) * chunkSize;
@@ -94,6 +102,16 @@ try {
                     await new Promise(resolve => setTimeout(resolve, delayMs));
                 }
             }
+                if (transferMode === "adaptive") {
+                        const waitMs = Math.max(
+                            0,
+                            nextChunkAt - performance.now()
+                        );
+
+                        if (waitMs > 0) {
+                            await new Promise(resolve => setTimeout(resolve, waitMs));
+                        }
+                    }
 
                 const start = i * chunkSize;
                 const end = Math.min(start + chunkSize, file.size);
@@ -113,6 +131,8 @@ try {
                 formData.append("total", totalChunks);
                 formData.append("upload_id", uploadId);
 
+                const requestStart = performance.now();
+
                 const response = await fetch("/upload-chunk", {
                     method: "POST",
                     body: formData
@@ -122,6 +142,38 @@ try {
 
                 if (!response.ok) {
                     throw new Error(result.error || "Upload failed");
+                }
+
+                if (transferMode === "adaptive") {
+                    const requestMs = performance.now() - requestStart;
+                    
+                    if (chunk.size === chunkSize) {
+                        baselineChunkMs = Math.min(baselineChunkMs, requestMs);
+
+                        const slowRequest = requestMs > Math.max(
+                            baselineChunkMs * 1.5,
+                            baselineChunkMs + 100
+                        );
+
+                        if (slowRequest) {
+                            adaptiveRateBps = Math.max(
+                                minRateBps,
+                                adaptiveRateBps * 0.7
+                            );
+                        } else {
+                            adaptiveRateBps = Math.min(
+                                maxRateBps,
+                                adaptiveRateBps + increaseBps
+                            );
+                        }
+                    }
+                    nextChunkAt = requestStart +
+                        (chunk.size / adaptiveRateBps) * 1000;
+
+                    console.log(
+                        `Adaptive rate: ${(adaptiveRateBps / (1024 * 1024)).toFixed(2)} MiB/s` +
+                        ` | Request: ${requestMs.toFixed(1)} ms`
+                    );
                 }
 
                 uploadId = result.upload_id;

@@ -130,7 +130,11 @@ def upload_chunk():
             "bytes_received": 0
         }
 
+
     upload = active_uploads.get(upload_id)
+
+    if upload is None:
+        return jsonify(error="Unknown upload"), 400
 
     if upload is None:
         return jsonify(error="Unknown upload"), 400
