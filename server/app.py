@@ -6,8 +6,6 @@ from uuid import uuid4
 import hashlib
 import hmac
 import json
-import time
-from itertools import count
 
 app = Flask(__name__)
 
@@ -122,12 +120,6 @@ def upload_chunk():
         return jsonify(error="Chunk integrity verification failed"), 422
 
     print(f"Chunk {index}: SHA-256 verified")
-
-    # Temporary server-side slowdown test
-    if index in (5, 10, 11):
-        print(f"Artificial delay on chunk {index}")
-        time.sleep(0.3)
-
 
     if index == 0:
         upload_id = uuid4().hex

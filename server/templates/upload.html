@@ -10,6 +10,13 @@
 
 <form id="upload-form">
     <input type="file" id="file-input" required>
+    <label for="transfer-mode">Transmission mode:</label>
+
+<select id="transfer-mode">
+    <option value="unrestricted">Unrestricted</option>
+    <option value="fixed">Fixed rate</option>
+    <option value="adaptive" selected>Adaptive</option>
+</select>
     <button type="submit">Upload</button>
 </form>
 
@@ -31,7 +38,8 @@
 
         const chunkSize = 1024 * 1024;
         const totalChunks = Math.ceil(file.size / chunkSize);
-        const transferMode = "adaptive";
+        const transferMode = document.getElementById("transfer-mode").value;
+        
         const targetRateBps = 2 * 1024 * 1024;
         const uploadKey = `upload:${file.name}:${file.size}:${file.lastModified}`;
         
@@ -146,6 +154,7 @@ try {
     }
 
     const transferStart = performance.now();
+    const chunkMetrics = [];
 
     measureLatency();
 
@@ -226,8 +235,9 @@ try {
                     throw new Error(result.error || "Upload failed");
                 }
 
+                const requestMs = performance.now() - requestStart;
+
                 if (transferMode === "adaptive") {
-                    const requestMs = performance.now() - requestStart;
                     
                     if (chunk.size === chunkSize) {
 
@@ -310,6 +320,24 @@ try {
                             ` | High probes: ${consecutiveHighProbes}`
                         );
                         }
+                
+                // Record experimental measurements
+                chunkMetrics.push({
+                    mode: transferMode,
+                    chunk: i,
+                    chunk_size_bytes: chunk.size,
+                    elapsed_seconds:
+                        (performance.now() - transferStart) / 1000,
+                    request_ms: requestMs,
+                    probe_latency_ms: latestProbeMs,
+                    smoothed_latency_ms: smoothedProbeMs,
+                    target_rate_mib:
+                        transferMode === "adaptive"
+                            ? adaptiveRateBps / (1024 * 1024)
+                            : transferMode === "fixed"
+                                ? targetRateBps / (1024 * 1024)
+                                : null
+                });
 
                 uploadId = result.upload_id;
                 localStorage.setItem(uploadKey, uploadId);
@@ -327,7 +355,7 @@ try {
             const averageThroughput =
                 (bytesTransferred / (1024 * 1024)) / elapsedSeconds;
 
-            console.log(`Transfer mode: ${transferMode}`);
+            console.table(chunkMetrics);
             console.log(`Transfer time: ${elapsedSeconds.toFixed(2)} seconds`);
             console.log(`Average throughput: ${averageThroughput.toFixed(2)} MiB/s`);
 
