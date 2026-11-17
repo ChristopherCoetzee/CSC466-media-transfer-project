@@ -37,8 +37,79 @@
         
         let uploadId = localStorage.getItem(uploadKey) || "";
         let startIndex = 0;
+        let latestProbeMs = null;
+        let latestProbeAt = null;
+        let baselineProbeMs = Infinity;
+        let smoothedProbeMs = null;
+        let consecutiveHighProbes = 0;
+
+        const probeSmoothingFactor = 0.3;
+        const probeSlowdownThreshold = 2;
+        let probeTimer = null;
+        let probeInFlight = false;
+
+        const probeIntervalMs = 500;
+        const probeController = new AbortController();
 
        button.disabled = true;
+
+       async function measureLatency() {
+    if (probeInFlight || probeController.signal.aborted) return;
+
+    probeInFlight = true;
+
+    const probeStart = performance.now();
+
+    try {
+        const response = await fetch("/latency-probe", {
+            cache: "no-store",
+            signal: probeController.signal
+        });
+
+        if (!response.ok) {
+            throw new Error("Latency probe failed");
+        }
+
+        latestProbeMs = performance.now() - probeStart;
+        latestProbeAt = performance.now();
+
+        baselineProbeMs = Math.min(
+        baselineProbeMs,
+        latestProbeMs
+    );
+
+        if (smoothedProbeMs === null) {
+            smoothedProbeMs = latestProbeMs;
+        } else {
+            smoothedProbeMs =
+                probeSmoothingFactor * latestProbeMs +
+                (1 - probeSmoothingFactor) * smoothedProbeMs;
+        }
+
+        const probeCongestionThreshold = Math.max(
+            baselineProbeMs * 2,
+            baselineProbeMs + 20
+        );
+
+        if (latestProbeMs > probeCongestionThreshold) {
+            consecutiveHighProbes++;
+        } else {
+            consecutiveHighProbes = 0;
+        }
+
+        console.log(
+            `Probe latency: ${latestProbeMs.toFixed(2)} ms`
+        );
+
+    } catch (error) {
+        if (!probeController.signal.aborted) {
+            console.warn("Latency probe failed:", error.message);
+        }
+
+    } finally {
+        probeInFlight = false;
+    }
+}
 
 try {
     if (uploadId) {
@@ -50,8 +121,6 @@ try {
         const saved = await response.json();
 
         if (response.status === 404) {
-            // The server no longer knows this upload.
-            // Begin a new upload instead.
             localStorage.removeItem(uploadKey);
             uploadId = "";
 
@@ -59,7 +128,6 @@ try {
             throw new Error(saved.error || "Could not check upload status");
 
         } else {
-            // Verify that the saved progress is consistent.
             if (saved.total !== totalChunks ||
                 !Number.isInteger(saved.next_index) ||
                 saved.next_index < 0 ||
@@ -79,6 +147,13 @@ try {
 
     const transferStart = performance.now();
 
+    measureLatency();
+
+    probeTimer = setInterval(
+        measureLatency,
+        probeIntervalMs
+    );
+
     let adaptiveRateBps = targetRateBps;
     const minRateBps = 0.5 * 1024 * 1024;
     const maxRateBps = 8 * 1024 * 1024;
@@ -86,6 +161,13 @@ try {
 
     let baselineChunkMs = Infinity;
     let nextChunkAt = performance.now();
+
+
+    let smoothedChunkMs = null;
+    const smoothingFactor = 0.3;
+
+    let consecutiveSlowRequests = 0;
+    const slowdownThreshold = 2;
 
                 for (let i = startIndex; i < totalChunks; i++) {
                             if (transferMode === "fixed") {
@@ -148,33 +230,86 @@ try {
                     const requestMs = performance.now() - requestStart;
                     
                     if (chunk.size === chunkSize) {
-                        baselineChunkMs = Math.min(baselineChunkMs, requestMs);
 
-                        const slowRequest = requestMs > Math.max(
-                            baselineChunkMs * 1.5,
-                            baselineChunkMs + 100
+                    baselineChunkMs = Math.min(baselineChunkMs, requestMs);
+
+                    if (smoothedChunkMs === null) {
+                        smoothedChunkMs = requestMs;
+                    } else {
+                        smoothedChunkMs =
+                            smoothingFactor * requestMs +
+                            (1 - smoothingFactor) * smoothedChunkMs;
+                    }
+
+                    const congestionThreshold = Math.max(
+                        baselineChunkMs * 1.5,
+                        baselineChunkMs + 100
+                    );
+
+                    if (requestMs > congestionThreshold) {
+                        consecutiveSlowRequests++;
+                    } else {
+                        consecutiveSlowRequests = 0;
+                    }
+
+                    const probeCongestionThreshold = Math.max(
+                        baselineProbeMs * 2,
+                        baselineProbeMs + 20
+                    );
+
+                    const probeFresh =
+                        latestProbeAt !== null &&
+                        performance.now() - latestProbeAt <= 1500;
+
+                    const sustainedHighLatency =
+                        probeFresh &&
+                        smoothedProbeMs > probeCongestionThreshold &&
+                        consecutiveHighProbes >= probeSlowdownThreshold;
+
+                    const latencyHealthy =
+                        probeFresh &&
+                        latestProbeMs <= probeCongestionThreshold &&
+                        smoothedProbeMs <= probeCongestionThreshold;
+
+                    const chunksHealthy =
+                        smoothedChunkMs <= congestionThreshold &&
+                        consecutiveSlowRequests === 0;
+
+                    if (sustainedHighLatency) {
+
+                        adaptiveRateBps = Math.max(
+                            minRateBps,
+                            adaptiveRateBps * 0.7
                         );
 
-                        if (slowRequest) {
-                            adaptiveRateBps = Math.max(
-                                minRateBps,
-                                adaptiveRateBps * 0.7
-                            );
-                        } else {
-                            adaptiveRateBps = Math.min(
-                                maxRateBps,
-                                adaptiveRateBps + increaseBps
-                            );
-                        }
+                        consecutiveHighProbes = 0;
+
+                        console.log("Sustained high latency detected");
+                    } else if (latencyHealthy && chunksHealthy) {
+
+                        adaptiveRateBps = Math.min(
+                            maxRateBps,
+                            adaptiveRateBps + increaseBps
+                        );
                     }
+                }
                     nextChunkAt = requestStart +
                         (chunk.size / adaptiveRateBps) * 1000;
 
                     console.log(
-                        `Adaptive rate: ${(adaptiveRateBps / (1024 * 1024)).toFixed(2)} MiB/s` +
-                        ` | Request: ${requestMs.toFixed(1)} ms`
-                    );
-                }
+                    `Adaptive rate: ${(adaptiveRateBps / (1024 * 1024)).toFixed(2)} MiB/s` +
+                    ` | Request: ${requestMs.toFixed(1)} ms` +
+                    ` | Smoothed chunk: ${smoothedChunkMs?.toFixed(1) ?? "N/A"} ms` +
+                    ` | Smoothed latency: ${smoothedProbeMs?.toFixed(1) ?? "N/A"} ms`
+                        );
+
+                    console.log(
+                            `Probe: ${latestProbeMs.toFixed(2)} ms` +
+                            ` | Baseline: ${baselineProbeMs.toFixed(2)} ms` +
+                            ` | Smoothed: ${smoothedProbeMs.toFixed(2)} ms` +
+                            ` | High probes: ${consecutiveHighProbes}`
+                        );
+                        }
 
                 uploadId = result.upload_id;
                 localStorage.setItem(uploadKey, uploadId);
@@ -203,6 +338,9 @@ try {
             status.textContent = `Upload failed: ${error.message}`;
 
         } finally {
+            clearInterval(probeTimer);
+            probeController.abort();
+
             button.disabled = false;
         }
     });

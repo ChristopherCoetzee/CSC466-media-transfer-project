@@ -6,6 +6,8 @@ from uuid import uuid4
 import hashlib
 import hmac
 import json
+import time
+from itertools import count
 
 app = Flask(__name__)
 
@@ -121,6 +123,12 @@ def upload_chunk():
 
     print(f"Chunk {index}: SHA-256 verified")
 
+    # Temporary server-side slowdown test
+    if index in (5, 10, 11):
+        print(f"Artificial delay on chunk {index}")
+        time.sleep(0.3)
+
+
     if index == 0:
         upload_id = uuid4().hex
         active_uploads[upload_id] = {
@@ -181,5 +189,9 @@ def upload_chunk():
 
     return jsonify(upload_id=upload_id, complete=False)
 
+
+@app.route("/latency-probe", methods=["GET"])
+def latency_probe():
+    return "", 204
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, debug=False)
