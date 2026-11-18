@@ -30,6 +30,34 @@
     const status = document.getElementById("status");
     const button = form.querySelector("button");
 
+    function exportCSV(data, filename) {
+    if (data.length === 0) return;
+
+    const headers = Object.keys(data[0]);
+
+    const rows = data.map(row =>
+        headers.map(header => row[header] ?? "").join(",")
+    );
+
+    const csv = [headers.join(","), ...rows].join("\n");
+
+    const blob = new Blob([csv], {
+        type: "text/csv;charset=utf-8;"
+    });
+
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
 
@@ -45,6 +73,10 @@
         
         let uploadId = localStorage.getItem(uploadKey) || "";
         let startIndex = 0;
+
+        const probeMetrics = [];
+        let transferStart = null;
+
         let latestProbeMs = null;
         let latestProbeAt = null;
         let baselineProbeMs = Infinity;
@@ -105,6 +137,15 @@
             consecutiveHighProbes = 0;
         }
 
+        probeMetrics.push({
+        elapsed_seconds:
+            (performance.now() - transferStart) / 1000,
+        latency_ms: latestProbeMs,
+        baseline_ms: baselineProbeMs,
+        smoothed_latency_ms: smoothedProbeMs,
+        consecutive_high_probes: consecutiveHighProbes
+    });
+
         console.log(
             `Probe latency: ${latestProbeMs.toFixed(2)} ms`
         );
@@ -153,7 +194,7 @@ try {
         }
     }
 
-    const transferStart = performance.now();
+    transferStart = performance.now();
     const chunkMetrics = [];
 
     measureLatency();
@@ -312,16 +353,8 @@ try {
                     ` | Smoothed chunk: ${smoothedChunkMs?.toFixed(1) ?? "N/A"} ms` +
                     ` | Smoothed latency: ${smoothedProbeMs?.toFixed(1) ?? "N/A"} ms`
                         );
-
-                    console.log(
-                            `Probe: ${latestProbeMs.toFixed(2)} ms` +
-                            ` | Baseline: ${baselineProbeMs.toFixed(2)} ms` +
-                            ` | Smoothed: ${smoothedProbeMs.toFixed(2)} ms` +
-                            ` | High probes: ${consecutiveHighProbes}`
-                        );
                         }
                 
-                // Record experimental measurements
                 chunkMetrics.push({
                     mode: transferMode,
                     chunk: i,
@@ -355,7 +388,23 @@ try {
             const averageThroughput =
                 (bytesTransferred / (1024 * 1024)) / elapsedSeconds;
 
+            console.log("Chunk measurements:");
             console.table(chunkMetrics);
+
+            console.log("Latency measurements:");
+            console.table(probeMetrics);
+
+            const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+
+            exportCSV(
+                chunkMetrics,
+                `${transferMode}_${timestamp}_chunks.csv`
+            );
+
+            exportCSV(
+                probeMetrics,
+                `${transferMode}_${timestamp}_latency.csv`
+            );
             console.log(`Transfer time: ${elapsedSeconds.toFixed(2)} seconds`);
             console.log(`Average throughput: ${averageThroughput.toFixed(2)} MiB/s`);
 
