@@ -17,6 +17,39 @@
     <option value="fixed">Fixed rate</option>
     <option value="adaptive" selected>Adaptive</option>
 </select>
+    <fieldset>
+    <legend>Experimental Settings</legend>
+
+    <label>Fixed/initial rate (MiB/s):</label>
+    <input type="number" id="target-rate"
+           value="2" min="0.5" step="0.25" required>
+    <br>
+
+    <label>Maximum adaptive rate (MiB/s):</label>
+    <input type="number" id="max-rate"
+           value="8" min="0.5" step="0.25" required>
+    <br>
+
+    <label>Additive increase (MiB/s):</label>
+    <input type="number" id="increase-rate"
+           value="0.25" min="0.05" step="0.05" required>
+    <br>
+
+    <label>Multiplicative decrease:</label>
+    <input type="number" id="decrease-factor"
+           value="0.7" min="0.1" max="0.99"
+           step="0.01" required>
+    <br>
+
+    <label>Latency margin (ms):</label>
+    <input type="number" id="latency-margin"
+           value="20" min="1" step="1" required>
+    <br>
+
+    <label>Consecutive high probes:</label>
+    <input type="number" id="high-probe-count"
+           value="2" min="1" step="1" required>
+</fieldset>
     <button type="submit">Upload</button>
 </form>
 
@@ -68,8 +101,31 @@
         const totalChunks = Math.ceil(file.size / chunkSize);
         const transferMode = document.getElementById("transfer-mode").value;
         
-        const targetRateBps = 2 * 1024 * 1024;
-        const uploadKey = `upload:${file.name}:${file.size}:${file.lastModified}`;
+        const targetRateBps =
+        Number(document.getElementById("target-rate").value) * 1024 * 1024;
+
+        const configuredMaxRateBps =
+            Number(document.getElementById("max-rate").value) * 1024 * 1024;
+
+        const configuredIncreaseBps =
+            Number(document.getElementById("increase-rate").value) * 1024 * 1024;
+
+        const decreaseFactor =
+            Number(document.getElementById("decrease-factor").value);
+
+        const latencyMarginMs =
+            Number(document.getElementById("latency-margin").value);
+
+        const configuredProbeCount =
+            Number(document.getElementById("high-probe-count").value);
+
+        if (transferMode === "adaptive" &&
+            targetRateBps > configuredMaxRateBps) {
+
+            status.textContent = "Initial rate cannot exceed maximum rate.";
+            return;
+    }
+            const uploadKey = `upload:${file.name}:${file.size}:${file.lastModified}`;
         
         let uploadId = localStorage.getItem(uploadKey) || "";
         let startIndex = 0;
@@ -84,7 +140,7 @@
         let consecutiveHighProbes = 0;
 
         const probeSmoothingFactor = 0.3;
-        const probeSlowdownThreshold = 2;
+        const probeSlowdownThreshold = configuredProbeCount;
         let probeTimer = null;
         let probeInFlight = false;
 
@@ -128,7 +184,7 @@
 
         const probeCongestionThreshold = Math.max(
             baselineProbeMs * 2,
-            baselineProbeMs + 20
+            baselineProbeMs + latencyMarginMs
         );
 
         if (latestProbeMs > probeCongestionThreshold) {
@@ -206,8 +262,8 @@ try {
 
     let adaptiveRateBps = targetRateBps;
     const minRateBps = 0.5 * 1024 * 1024;
-    const maxRateBps = 8 * 1024 * 1024;
-    const increaseBps = 0.25 * 1024 * 1024;
+    const maxRateBps = configuredMaxRateBps;
+    const increaseBps = configuredIncreaseBps;
 
     let baselineChunkMs = Infinity;
     let nextChunkAt = performance.now();
@@ -305,7 +361,7 @@ try {
 
                     const probeCongestionThreshold = Math.max(
                         baselineProbeMs * 2,
-                        baselineProbeMs + 20
+                        baselineProbeMs + latencyMarginMs
                     );
 
                     const probeFresh =
@@ -330,7 +386,7 @@ try {
 
                         adaptiveRateBps = Math.max(
                             minRateBps,
-                            adaptiveRateBps * 0.7
+                            adaptiveRateBps * decreaseFactor
                         );
 
                         consecutiveHighProbes = 0;
@@ -393,8 +449,34 @@ try {
 
             console.log("Latency measurements:");
             console.table(probeMetrics);
-
             const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+
+            const experimentSummary = [{
+                    mode: transferMode,
+                    transfer_start_utc: new Date(
+                        performance.timeOrigin + transferStart
+                    ).toISOString(),
+                    file_size_bytes: file.size,
+                    chunk_size_bytes: chunkSize,
+                    bytes_transferred: bytesTransferred,
+                    transfer_time_seconds: elapsedSeconds,
+                    average_throughput_mib_s: averageThroughput,
+                    initial_rate_mib_s: targetRateBps / (1024 * 1024),
+                    min_rate_mib_s: minRateBps / (1024 * 1024),
+                    max_rate_mib_s: maxRateBps / (1024 * 1024),
+                    additive_increase_mib_s: increaseBps / (1024 * 1024),
+                    decrease_factor: decreaseFactor,
+                    latency_margin_ms: latencyMarginMs,
+                    high_probe_threshold: probeSlowdownThreshold,
+                    probe_interval_ms: probeIntervalMs,
+                    probe_smoothing_factor: probeSmoothingFactor,
+                    chunk_smoothing_factor: smoothingFactor
+                }];
+
+exportCSV(
+    experimentSummary,
+    `${transferMode}_${timestamp}_summary.csv`
+);
 
             exportCSV(
                 chunkMetrics,
