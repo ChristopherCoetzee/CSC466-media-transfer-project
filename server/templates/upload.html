@@ -149,7 +149,52 @@
 
        button.disabled = true;
 
-       async function measureLatency() {
+
+    async function calibrateLatency() {
+
+    const samples = [];
+
+    for (let i = 0; i < 6; i++) {
+
+        const start = performance.now();
+
+        const response = await fetch("/latency-probe", {
+            cache: "no-store",
+            signal: AbortSignal.timeout(1500)
+        });
+
+        if (!response.ok) {
+            throw new Error("Latency calibration failed");
+        }
+
+        const latency = performance.now() - start;
+
+        if (i > 0) {
+            samples.push(latency);
+
+            latestProbeMs = latency;
+            latestProbeAt = performance.now();
+        }
+
+        if (i < 5) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+    }
+
+    const sortedSamples = [...samples].sort((a, b) => a - b);
+
+    baselineProbeMs = sortedSamples[0];
+    smoothedProbeMs = sortedSamples[2];
+
+    console.log("Calibration samples:", samples);
+
+    console.log(
+        `Calibrated baseline: ${baselineProbeMs.toFixed(2)} ms` +
+        ` | Initial smoothed latency: ${smoothedProbeMs.toFixed(2)} ms`
+    );
+}
+
+    async function measureLatency() {
     if (probeInFlight || probeController.signal.aborted) return;
 
     probeInFlight = true;
@@ -249,6 +294,10 @@ try {
             console.log(`Resuming from chunk ${startIndex}`);
         }
     }
+
+    status.textContent = "Calibrating network latency...";
+
+    await calibrateLatency();
 
     transferStart = performance.now();
     const chunkMetrics = [];
