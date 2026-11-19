@@ -37,13 +37,13 @@
 
     <label>Multiplicative decrease:</label>
     <input type="number" id="decrease-factor"
-           value="0.7" min="0.1" max="0.99"
+           value="0.5" min="0.1" max="0.99"
            step="0.01" required>
     <br>
 
     <label>Latency margin (ms):</label>
     <input type="number" id="latency-margin"
-           value="20" min="1" step="1" required>
+           value="60" min="1" step="1" required>
     <br>
 
     <label>Consecutive high probes:</label>
@@ -194,6 +194,15 @@
     );
 }
 
+    let adaptiveRateBps = targetRateBps;
+    const minRateBps = 0.25 * 1024 * 1024;
+    const maxRateBps = configuredMaxRateBps;
+    const increaseBps = configuredIncreaseBps;
+
+    let consecutiveHealthyProbes = 0;
+    let lastChunkStart = null;
+    let lastChunkBytes = 0;
+
     async function measureLatency() {
     if (probeInFlight || probeController.signal.aborted) return;
 
@@ -238,13 +247,58 @@
             consecutiveHighProbes = 0;
         }
 
+        let rateAction = "hold";
+        const previousRate = adaptiveRateBps;
+
+if (transferMode === "adaptive" && transferStart !== null) {
+
+    const healthy =
+        latestProbeMs <= probeCongestionThreshold &&
+        smoothedProbeMs <= probeCongestionThreshold;
+
+    consecutiveHealthyProbes = healthy
+        ? consecutiveHealthyProbes + 1
+        : 0;
+
+    if (
+        consecutiveHighProbes >= probeSlowdownThreshold &&
+        smoothedProbeMs > probeCongestionThreshold
+    ) {
+        adaptiveRateBps = Math.max(
+            minRateBps,
+            adaptiveRateBps * decreaseFactor
+        );
+
+        consecutiveHighProbes = 0;
+        consecutiveHealthyProbes = 0;
+        rateAction = adaptiveRateBps === previousRate
+    ? "hold" : "decrease";
+
+    } else if (consecutiveHealthyProbes >= 2) {
+
+        adaptiveRateBps = Math.min(
+            maxRateBps,
+            adaptiveRateBps + increaseBps
+        );
+
+        rateAction = adaptiveRateBps === previousRate
+    ? "hold" : "increase";
+    }
+}
+
         probeMetrics.push({
         elapsed_seconds:
             (performance.now() - transferStart) / 1000,
         latency_ms: latestProbeMs,
         baseline_ms: baselineProbeMs,
         smoothed_latency_ms: smoothedProbeMs,
-        consecutive_high_probes: consecutiveHighProbes
+        consecutive_high_probes: consecutiveHighProbes,
+        target_rate_mib:
+        transferMode === "adaptive"
+            ? adaptiveRateBps / (1024 * 1024)
+            : null,
+
+    rate_action: rateAction,
     });
 
         console.log(
@@ -252,9 +306,12 @@
         );
 
     } catch (error) {
-        if (!probeController.signal.aborted) {
-            console.warn("Latency probe failed:", error.message);
-        }
+    consecutiveHighProbes = 0;
+    consecutiveHealthyProbes = 0;
+
+    if (!probeController.signal.aborted) {
+        console.warn("Latency probe failed:", error.message);
+    }
 
     } finally {
         probeInFlight = false;
@@ -309,21 +366,6 @@ try {
         probeIntervalMs
     );
 
-    let adaptiveRateBps = targetRateBps;
-    const minRateBps = 0.5 * 1024 * 1024;
-    const maxRateBps = configuredMaxRateBps;
-    const increaseBps = configuredIncreaseBps;
-
-    let baselineChunkMs = Infinity;
-    let nextChunkAt = performance.now();
-
-
-    let smoothedChunkMs = null;
-    const smoothingFactor = 0.3;
-
-    let consecutiveSlowRequests = 0;
-    const slowdownThreshold = 2;
-
                 for (let i = startIndex; i < totalChunks; i++) {
                             if (transferMode === "fixed") {
                 const bytesScheduled = (i - startIndex) * chunkSize;
@@ -340,15 +382,20 @@ try {
                 }
             }
                 if (transferMode === "adaptive") {
-                        const waitMs = Math.max(
-                            0,
-                            nextChunkAt - performance.now()
-                        );
+                while (lastChunkStart !== null) {
 
-                        if (waitMs > 0) {
-                            await new Promise(resolve => setTimeout(resolve, waitMs));
-                        }
-                    }
+                    const waitMs =
+                        lastChunkStart +
+                        (lastChunkBytes / adaptiveRateBps) * 1000 -
+                        performance.now();
+
+                    if (waitMs <= 0) break;
+
+                    await new Promise(resolve =>
+                        setTimeout(resolve, Math.min(waitMs, 100))
+                    );
+                }
+            }
 
                 const start = i * chunkSize;
                 const end = Math.min(start + chunkSize, file.size);
@@ -384,81 +431,9 @@ try {
                 const requestMs = performance.now() - requestStart;
 
                 if (transferMode === "adaptive") {
-                    
-                    if (chunk.size === chunkSize) {
-
-                    baselineChunkMs = Math.min(baselineChunkMs, requestMs);
-
-                    if (smoothedChunkMs === null) {
-                        smoothedChunkMs = requestMs;
-                    } else {
-                        smoothedChunkMs =
-                            smoothingFactor * requestMs +
-                            (1 - smoothingFactor) * smoothedChunkMs;
-                    }
-
-                    const congestionThreshold = Math.max(
-                        baselineChunkMs * 1.5,
-                        baselineChunkMs + 100
-                    );
-
-                    if (requestMs > congestionThreshold) {
-                        consecutiveSlowRequests++;
-                    } else {
-                        consecutiveSlowRequests = 0;
-                    }
-
-                    const probeCongestionThreshold = Math.max(
-                        baselineProbeMs * 2,
-                        baselineProbeMs + latencyMarginMs
-                    );
-
-                    const probeFresh =
-                        latestProbeAt !== null &&
-                        performance.now() - latestProbeAt <= 1500;
-
-                    const sustainedHighLatency =
-                        probeFresh &&
-                        smoothedProbeMs > probeCongestionThreshold &&
-                        consecutiveHighProbes >= probeSlowdownThreshold;
-
-                    const latencyHealthy =
-                        probeFresh &&
-                        latestProbeMs <= probeCongestionThreshold &&
-                        smoothedProbeMs <= probeCongestionThreshold;
-
-                    const chunksHealthy =
-                        smoothedChunkMs <= congestionThreshold &&
-                        consecutiveSlowRequests === 0;
-
-                    if (sustainedHighLatency) {
-
-                        adaptiveRateBps = Math.max(
-                            minRateBps,
-                            adaptiveRateBps * decreaseFactor
-                        );
-
-                        consecutiveHighProbes = 0;
-
-                        console.log("Sustained high latency detected");
-                    } else if (latencyHealthy && chunksHealthy) {
-
-                        adaptiveRateBps = Math.min(
-                            maxRateBps,
-                            adaptiveRateBps + increaseBps
-                        );
-                    }
+                    lastChunkStart = requestStart;
+                    lastChunkBytes = chunk.size;
                 }
-                    nextChunkAt = requestStart +
-                        (chunk.size / adaptiveRateBps) * 1000;
-
-                    console.log(
-                    `Adaptive rate: ${(adaptiveRateBps / (1024 * 1024)).toFixed(2)} MiB/s` +
-                    ` | Request: ${requestMs.toFixed(1)} ms` +
-                    ` | Smoothed chunk: ${smoothedChunkMs?.toFixed(1) ?? "N/A"} ms` +
-                    ` | Smoothed latency: ${smoothedProbeMs?.toFixed(1) ?? "N/A"} ms`
-                        );
-                        }
                 
                 chunkMetrics.push({
                     mode: transferMode,
@@ -502,6 +477,8 @@ try {
 
             const experimentSummary = [{
                     mode: transferMode,
+                    controller_version: "probe_based_v3",
+                    additive_increase_basis: "healthy_probe",
                     transfer_start_utc: new Date(
                         performance.timeOrigin + transferStart
                     ).toISOString(),
@@ -519,7 +496,7 @@ try {
                     high_probe_threshold: probeSlowdownThreshold,
                     probe_interval_ms: probeIntervalMs,
                     probe_smoothing_factor: probeSmoothingFactor,
-                    chunk_smoothing_factor: smoothingFactor
+                    chunk_smoothing_factor: null
                 }];
 
 exportCSV(
